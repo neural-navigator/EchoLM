@@ -1,74 +1,85 @@
-import json
-import math
 from collections import defaultdict
-
+import math
+import re
 import torch
 import torch.nn as nn
 
 
-class BasicLLM(nn.Module):
-    def __init__(self, n_params=10):
+class NGram(nn.Module):
+    def __init__(self, n_params):
+        super(NGram, self).__init__()
         self.n_params = n_params
         self.state = [{} for _ in range(n_params)]
-        self.test_data = []
-        # self.num_train_tokens = len(self.train_data)
-        self.training_dataset_path = "../dataset/tokens.json"
+        self.vocab_size = 0
         self.log_probs = []
 
-    def get_data(self):
-        with open(self.training_dataset_path, "r", encoding="utf-8") as f:
-            self.training_data = json.load(f)
+    def handle_data(self, data_path):
+        """This method read the data file"""
+        with open(data_path) as f:
+            content = f.read()
+        content = re.findall(r"\b[a-zA-Z0-9]+\b|[.]", content.lower())
+        self.vocab_size += len(set(content))
+        return content
 
-    def train(self):
-        for i in range(1, self.n_params+1):
-            for item in range(len(self.training_data)):
-                if i + item >= len(self.training_data):
+    def _train_ngram(self, training_data):
+        """This method trains the model"""
+        for i in range(self.n_params):
+            for idx, j in enumerate(training_data):
+                if idx + i >= len(training_data):
                     break
-                context = tuple(self.training_data[item: item+i-1])
-                next_token = self.training_data[item+i]
-                if context not in self.state[i-1]:
-                    self.state[i-1][context] = defaultdict(int)
-                self.state[i-1][context][next_token] = self.state[i-1][context][next_token] + 1
+                context = tuple(training_data[idx: idx + i])
+                next_token = training_data[idx + i]
+                if context not in self.state[i]:
+                    self.state[i][context] = defaultdict(int)
+                self.state[i][context][next_token] = self.state[i][context][next_token] + 1
 
-    def compute_laplace_log_probs(self):
-        for level in self.state:
-            level_logprob = {}
-            for context, nex_token in level.items():
-                total_count = sum(nex_token.values())
-                level_logprob[context] = {}
-                for token, count in nex_token.items():
-                    prob = (count+1) / (total_count+len(set(self.training_data)))
-                    level_logprob[context][token] = math.log(prob)
-            self.log_probs.append(level_logprob)
+    def get_log_probs(self):
+        """This method returns the log probabilities of each token in training data"""
+        for item in self.state:
+            log_dict = {}
+            for k, v in item.items():
+                total_count = sum(v.values())
+                log_dict[k] = {k1: math.log((v1 + 1) / (total_count + self.vocab_size))
+                               for k1, v1 in v.items()}
+            self.log_probs.append(log_dict)
 
-    def get_perplexity(self):
-        tokens = self.test_data
-        num_tokens = len(tokens)
-        log_likelihoods = 0
-        for i in range(num_tokens):
-            context_start = max(0, i - self.n_params)
-            context = tuple(tokens[context_start: i])
-            token = tokens[i]
-            if context:
-                log_likelihoods += self.log_probs[i].get(context, {}).get(token, math.log(1e-10))
-            else:
-                pass
-
-        avg_log_likelihoods = log_likelihoods/num_tokens
-        perplexity = math.exp(-avg_log_likelihoods)
+    def calculate_perplexity(self, test_data):
+        """This method calculates the perplexity of the model"""
+        test_tokens = test_data.lower().split()
+        n_tokens = len(test_tokens)
+        log_liklihood = 0
+        if n_tokens > self.n_params:
+            context = test_data[-self.n_params:]
+        else:
+            context = test_data
+        for i in range(n_tokens):
+            context = tuple(test_tokens[:i])
+            token = test_tokens[i]
+            log_liklihood += self.log_probs[i].get(context, {}).get(token, math.log(1e-10))
+        avg_log_liklihood = log_liklihood / n_tokens
+        perplexity = math.exp(-avg_log_liklihood)
         return perplexity
 
-    def forward(self, context):
+    def predict_next_token(self, context):
+        """ This method predicts the next token in the context. We wil prefer the
+        longest context present, even if the probability is less than the smaller
+        n-gram models """
+        if type(context) == str:
+            context = re.findall(r"\b[a-zA-Z0-9]+\b|[.]", context.lower())
+
+        if len(context) > self.n_params:
+            context = context[-self.n_params:]
+
+        for n in range(len(context), 1, -1):
+            context_n = tuple(context[-(n-1):])
+            counts = self.state[n-1].get(context_n)
+            if counts:
+                return max(counts.items(), key=lambda x: x[1])[0]
+        unigram_counts = self.state[0].get(())
+        if unigram_counts:
+            return max(unigram_counts.items(), key=lambda x: x[1])[0]
+        return None
+
+    def generate_text(self, context, max_token):
         pass
 
-    def run(self):
-        self.get_data()
-        self.train()
-        self.compute_laplace_log_probs()
-        with open("../dataset/trained_model.json", "w", encoding="utf-8") as f:
-            json.dump(self.state, f)
-
-
-if __name__ == "__main__":
-    basic = BasicLLM()
-    basic.run()
