@@ -4,3 +4,7 @@ backgroundColor = "#F0F8FF"
 secondaryBackgroundColor = "#E6F0FA"
 textColor = "#000000"
 font = "sans serif"
+
+[server]
+folderWatchBlacklist = [".venv", "venv", "__pycache__"]
+

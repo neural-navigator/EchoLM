@@ -1,13 +1,14 @@
+import os
+import re
+import json
 from collections import defaultdict
 import math
-import re
-import torch
-import torch.nn as nn
+
+import numpy as np
 
 
-class NGram(nn.Module):
+class NGram():
     def __init__(self, n_params):
-        super(NGram, self).__init__()
         self.n_params = n_params
         self.state = [{} for _ in range(n_params)]
         self.vocab_size = 0
@@ -45,16 +46,11 @@ class NGram(nn.Module):
 
     def calculate_perplexity(self, test_data):
         """This method calculates the perplexity of the model"""
-        test_tokens = test_data.lower().split()
-        n_tokens = len(test_tokens)
+        n_tokens = len(test_data)
         log_liklihood = 0
-        if n_tokens > self.n_params:
-            context = test_data[-self.n_params:]
-        else:
-            context = test_data
         for i in range(n_tokens):
-            context = tuple(test_tokens[:i])
-            token = test_tokens[i]
+            context = tuple(test_data[:i])
+            token = test_data[i]
             log_liklihood += self.log_probs[i].get(context, {}).get(token, math.log(1e-10))
         avg_log_liklihood = log_liklihood / n_tokens
         perplexity = math.exp(-avg_log_liklihood)
@@ -72,14 +68,64 @@ class NGram(nn.Module):
 
         for n in range(len(context), 1, -1):
             context_n = tuple(context[-(n-1):])
-            counts = self.state[n-1].get(context_n)
+            counts = self.log_probs[n-1].get(context_n)
             if counts:
                 return max(counts.items(), key=lambda x: x[1])[0]
-        unigram_counts = self.state[0].get(())
-        if unigram_counts:
-            return max(unigram_counts.items(), key=lambda x: x[1])[0]
+        unigram_log = self.log_probs[0].get(())
+        if unigram_log:
+            return max(unigram_log.items(), key=lambda x: x[1])[0]
         return None
 
-    def generate_text(self, context, max_token):
-        pass
+    def predict_next_token_with_temp(self, context, temperature):
+        """ This method predicts the next token in the context. We wil prefer the
+            longest context present, even if the probability is less than the smaller
+            n-gram models """
+        if type(context) == str:
+            context = re.findall(r"\b[a-zA-Z0-9]+\b|[.]", context.lower())
+
+        if len(context) > self.n_params:
+            context = context[-self.n_params:]
+
+        for n in range(len(context), 1, -1):
+            context_n = tuple(context[-(n-1):])
+            prob = self.log_probs[n-1].get(context_n)
+            if prob:
+                prob_array = np.array(list(prob.values()))
+                logits_t = prob_array / temperature
+                exp_logits = np.exp(logits_t - np.max(logits_t))
+                prob_val = exp_logits / np.sum(exp_logits)
+                return str(np.random.choice(list(prob.keys()), p=prob_val))
+        unigram_log = self.log_probs[0].get(())
+        if unigram_log:
+            return str(max(unigram_log.items(), key=lambda x: x[1])[0])
+        return None
+
+    def train(self, data_path):
+        training_data = self.handle_data(data_path)
+        self._train_ngram(training_data)
+        self.get_log_probs()
+
+    def forward(self, context, max_token, temp=0):
+        if type(context) == str:
+            context = re.findall(r"\b[a-zA-Z0-9]+\b|[.]", context.lower())
+
+        if len(context) > self.n_params:
+            context = context[-self.n_params:]
+
+        perplexity = self.calculate_perplexity(context)
+        perplexity_dict = {tuple(context): perplexity}
+        for _ in range(max_token):
+            if temp == 0:
+                token = self.predict_next_token(context)
+                context.append(token)
+            else:
+                token = self.predict_next_token_with_temp(context, temp)
+                context.append(token)
+                changed_perplexity = self.calculate_perplexity(context[-self.n_params:])
+                perplexity_dict[token] = changed_perplexity
+
+        return " ".join(context), perplexity_dict
+
+    def forward_with_temp(self):
+        raise NotImplementedError()
 
