@@ -125,7 +125,3 @@ class NGram():
                 perplexity_dict[token] = changed_perplexity
 
         return " ".join(context), perplexity_dict
-
-    def forward_with_temp(self):
-        raise NotImplementedError()
-
